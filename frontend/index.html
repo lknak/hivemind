@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HiveMind Dashboard</title>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .scrollbar-thin::-webkit-scrollbar {
+            width: 6px;
+        }
+        .scrollbar-thin::-webkit-scrollbar-track {
+            background: #1f2937;
+        }
+        .scrollbar-thin::-webkit-scrollbar-thumb {
+            background: #4b5563;
+            border-radius: 3px;
+        }
+        .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+            background: #6b7280;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useCallback } = React;
+
+        const API_BASE = "";
+
+        // Format val_bpb
+        const formatBPB = (val) => val?.toFixed(6) || "N/A";
+
+        // Format time ago
+        const formatTimeAgo = (timestamp) => {
+            const seconds = Math.floor((Date.now() / 1000) - timestamp);
+            if (seconds < 60) return `${seconds}s ago`;
+            if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+            if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+            return `${Math.floor(seconds / 86400)}d ago`;
+        };
+
+        // Format timestamp
+        const formatTimestamp = (timestamp) => {
+            return new Date(timestamp * 1000).toLocaleString();
+        };
+
+        // Agent Status Badge
+        const StatusBadge = ({ state }) => {
+            const colors = {
+                idle: "bg-gray-600",
+                spawning: "bg-yellow-600",
+                experimenting: "bg-blue-600",
+                broadcasting: "bg-green-600",
+                error: "bg-red-600",
+                stopped: "bg-gray-700"
+            };
+            return (
+                <span className={`${colors[state] || "bg-gray-600"} px-2 py-1 rounded text-xs uppercase font-semibold`}>
+                    {state}
+                </span>
+            );
+        };
+
+        // Improvement indicator
+        const ImprovementBadge = ({ improvement }) => {
+            const isPositive = improvement > 0;
+            return (
+                <span className={`font-mono ${isPositive ? "text-green-400" : "text-red-400"}`}>
+                    {isPositive ? "+" : ""}{improvement.toFixed(6)}
+                </span>
+            );
+        };
+
+        // Agent Card Component
+        const AgentCard = ({ agent }) => {
+            return (
+                <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
+                    <div className="flex justify-between items-start mb-3">
+                        <div>
+                            <h3 className="text-lg font-bold">Agent {agent.agent_id}</h3>
+                            <p className="text-xs text-gray-400 truncate max-w-xs">{agent.worktree_path}</p>
+                        </div>
+                        <StatusBadge state={agent.state} />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-sm">
+                        <div>
+                            <span className="text-gray-400">Experiments:</span>
+                            <span className="ml-2 font-mono">{agent.experiments_run}</span>
+                        </div>
+                        <div>
+                            <span className="text-gray-400">Discoveries:</span>
+                            <span className="ml-2 font-mono">{agent.discoveries_made}</span>
+                        </div>
+                        <div>
+                            <span className="text-gray-400">Received:</span>
+                            <span className="ml-2 font-mono">{agent.discoveries_received}</span>
+                        </div>
+                        <div>
+                            <span className="text-gray-400">Last Activity:</span>
+                            <span className="ml-2 text-gray-300">{agent.last_discovery_time ? formatTimeAgo(agent.last_discovery_time) : "Never"}</span>
+                        </div>
+                    </div>
+                    {agent.current_experiment && (
+                        <div className="mt-2 pt-2 border-t border-gray-700">
+                            <span className="text-xs text-gray-400">Current:</span>
+                            <span className="ml-2 text-sm">{agent.current_experiment}</span>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        // Discovery Card Component
+        const DiscoveryCard = ({ discovery }) => {
+            const isImprovement = discovery.improvement > 0;
+            return (
+                <div className={`bg-gray-800 rounded-lg p-4 border ${isImprovement ? "border-green-600/50" : "border-gray-700"}`}>
+                    <div className="flex justify-between items-start mb-2">
+                        <div className="flex items-center gap-2">
+                            <span className="text-blue-400 font-semibold">Agent {discovery.agent_id}</span>
+                            <span className="text-gray-500">•</span>
+                            <span className="text-gray-400 text-sm">{formatTimeAgo(discovery.timestamp)}</span>
+                        </div>
+                        <ImprovementBadge improvement={discovery.improvement} />
+                    </div>
+
+                    <div className="mb-2">
+                        <div className="flex items-center gap-2">
+                            <span className="text-gray-400 text-sm">val_bpb:</span>
+                            <span className="font-mono text-gray-300">{discovery.baseline_bpb.toFixed(6)}</span>
+                            <span className="text-gray-500">→</span>
+                            <span className={`font-mono font-bold ${isImprovement ? "text-green-400" : "text-red-400"}`}>
+                                {discovery.new_bpb.toFixed(6)}
+                            </span>
+                        </div>
+                    </div>
+
+                    <div className="text-sm text-gray-300 mb-2 line-clamp-2">
+                        {discovery.description}
+                    </div>
+
+                    <div className="flex flex-wrap gap-1 mt-2">
+                        <span className="text-xs bg-gray-700 px-2 py-1 rounded">{discovery.experiment_type}</span>
+                        {discovery.modified_parameters.slice(0, 3).map((param, i) => (
+                            <span key={i} className="text-xs bg-blue-900/50 px-2 py-1 rounded text-blue-300">{param}</span>
+                        ))}
+                    </div>
+
+                    {discovery.diff && (
+                        <details className="mt-2">
+                            <summary className="text-xs text-gray-400 cursor-pointer hover:text-gray-300">View diff</summary>
+                            <pre className="bg-gray-900 rounded p-2 mt-2 overflow-x-auto text-xs font-mono">
+                                <code>{discovery.diff}</code>
+                            </pre>
+                        </details>
+                    )}
+                </div>
+            );
+        };
+
+        // BPB Timeline Chart (simple SVG implementation)
+        const BPBTimeline = ({ data }) => {
+            if (!data || data.length === 0) {
+                return <div className="text-gray-400 text-center py-8">No data yet</div>;
+            }
+
+            const width = 600;
+            const height = 200;
+            const padding = 20;
+
+            const bpbValues = data.map(d => d.val_bpb);
+            const minBPB = Math.min(...bpbValues) * 0.999;
+            const maxBPB = Math.max(...bpbValues) * 1.001;
+
+            const xScale = (i) => padding + (i / (data.length - 1)) * (width - 2 * padding);
+            const yScale = (val) => height - padding - ((val - minBPB) / (maxBPB - minBPB)) * (height - 2 * padding);
+
+            const linePath = data.map((d, i) =>
+                `${i === 0 ? "M" : "L"} ${xScale(i).toFixed(1)} ${yScale(d.val_bpb).toFixed(1)}`
+            ).join(" ");
+
+            return (
+                <div className="bg-gray-800 rounded-lg p-4">
+                    <h3 className="text-lg font-bold mb-4">val_bpb Over Time</h3>
+                    <svg width={width} height={height} className="mx-auto">
+                        {/* Grid lines */}
+                        {[0, 0.25, 0.5, 0.75, 1].map((t, i) => (
+                            <line
+                                key={i}
+                                x1={padding}
+                                y1={height - padding - t * (height - 2 * padding)}
+                                x2={width - padding}
+                                y2={height - padding - t * (height - 2 * padding)}
+                                stroke="#374151"
+                                strokeDasharray="4,4"
+                            />
+                        ))}
+
+                        {/* Best so far line (orange) */}
+                        {(() => {
+                            let best = Infinity;
+                            const bestPoints = data.map((d, i) => {
+                                if (d.val_bpb < best) best = d.val_bpb;
+                                return best;
+                            });
+                            return (
+                                <polyline
+                                    points={bestPoints.map((b, i) =>
+                                        `${xScale(i).toFixed(1)},${yScale(b).toFixed(1)}`
+                                    ).join(" ")}
+                                    fill="none"
+                                    stroke="#f59e0b"
+                                    strokeWidth="1"
+                                    strokeDasharray="6,3"
+                                    opacity="0.7"
+                                />
+                            );
+                        })()}
+
+                        {/* Data points line (blue) */}
+                        <polyline
+                            points={linePath}
+                            fill="none"
+                            stroke="#3b82f6"
+                            strokeWidth="2"
+                        />
+
+                        {/* Data points */}
+                        {data.map((d, i) => (
+                            <circle
+                                key={i}
+                                cx={xScale(i)}
+                                cy={yScale(d.val_bpb)}
+                                r={d.is_improvement ? 4 : 2}
+                                fill={d.is_improvement ? "#22c55e" : "#ef4444"}
+                            />
+                        ))}
+
+                        {/* Y-axis labels */}
+                        <text x={padding - 10} y={yScale(maxBPB)} textAnchor="end" className="text-xs fill-gray-400">
+                            {maxBPB.toFixed(4)}
+                        </text>
+                        <text x={padding - 10} y={yScale(minBPB)} textAnchor="end" className="text-xs fill-gray-400">
+                            {minBPB.toFixed(4)}
+                        </text>
+                    </svg>
+                    <div className="flex justify-center gap-4 mt-2 text-xs">
+                        <div className="flex items-center gap-1">
+                            <div className="w-3 h-3 bg-blue-500 rounded"></div>
+                            <span className="text-gray-400">val_bpb</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                            <div className="w-3 h-3 bg-orange-500 rounded"></div>
+                            <span className="text-gray-400">Best so far</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                            <div className="w-3 h-3 bg-green-500 rounded-full"></div>
+                            <span className="text-gray-400">Improvement</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                            <div className="w-3 h-3 bg-red-500 rounded-full"></div>
+                            <span className="text-gray-400">Degradation</span>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // Main Dashboard Component
+        const Dashboard = () => {
+            const [agents, setAgents] = useState([]);
+            const [discoveries, setDiscoveries] = useState([]);
+            const [timeline, setTimeline] = useState([]);
+            const [status, setStatus] = useState(null);
+            const [activeTab, setActiveTab] = useState("discoveries");
+
+            // Fetch agents
+            const fetchAgents = useCallback(async () => {
+                try {
+                    const response = await fetch(`${API_BASE}/api/agents`);
+                    const data = await response.json();
+                    setAgents(data);
+                } catch (error) {
+                    console.error("Error fetching agents:", error);
+                }
+            }, []);
+
+            // Fetch discoveries
+            const fetchDiscoveries = useCallback(async () => {
+                try {
+                    const response = await fetch(`${API_BASE}/api/discoveries?limit=100`);
+                    const data = await response.json();
+                    setDiscoveries(data.discoveries);
+                } catch (error) {
+                    console.error("Error fetching discoveries:", error);
+                }
+            }, []);
+
+            // Fetch timeline
+            const fetchTimeline = useCallback(async () => {
+                try {
+                    const response = await fetch(`${API_BASE}/api/metrics/bpb-over-time`);
+                    const data = await response.json();
+                    setTimeline(data);
+                } catch (error) {
+                    console.error("Error fetching timeline:", error);
+                }
+            }, []);
+
+            // Fetch status
+            const fetchStatus = useCallback(async () => {
+                try {
+                    const response = await fetch(`${API_BASE}/api/status`);
+                    const data = await response.json();
+                    setStatus(data);
+                } catch (error) {
+                    console.error("Error fetching status:", error);
+                }
+            }, []);
+
+            // Initial fetch and polling
+            useEffect(() => {
+                fetchAgents();
+                fetchDiscoveries();
+                fetchTimeline();
+                fetchStatus();
+
+                const interval = setInterval(() => {
+                    fetchAgents();
+                    fetchDiscoveries();
+                    fetchTimeline();
+                    fetchStatus();
+                }, 2000);
+
+                return () => clearInterval(interval);
+            }, [fetchAgents, fetchDiscoveries, fetchTimeline, fetchStatus]);
+
+            return (
+                <div className="min-h-screen">
+                    {/* Header */}
+                    <header className="bg-gray-800 border-b border-gray-700 px-6 py-4">
+                        <div className="flex justify-between items-center">
+                            <div>
+                                <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">
+                                    HiveMind
+                                </h1>
+                                <p className="text-sm text-gray-400">Multi-Agent Research Framework</p>
+                            </div>
+                            {status && (
+                                <div className="flex items-center gap-4 text-sm">
+                                    <div>
+                                        <span className="text-gray-400">Agents:</span>
+                                        <span className="ml-2 font-mono text-blue-400">{status.num_agents}</span>
+                                    </div>
+                                    <div>
+                                        <span className="text-gray-400">Discoveries:</span>
+                                        <span className="ml-2 font-mono text-green-400">{status.total_discoveries}</span>
+                                    </div>
+                                    {status.best_bpb && (
+                                        <div>
+                                            <span className="text-gray-400">Best val_bpb:</span>
+                                            <span className="ml-2 font-mono text-purple-400">{status.best_bpb.toFixed(6)}</span>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    </header>
+
+                    {/* Main Content */}
+                    <main className="p-6">
+                        {/* Agents Section */}
+                        <section className="mb-8">
+                            <h2 className="text-xl font-bold mb-4 text-gray-200">Agents</h2>
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                {agents.map((agent) => (
+                                    <AgentCard key={agent.agent_id} agent={agent} />
+                                ))}
+                                {agents.length === 0 && (
+                                    <div className="col-span-full text-center py-8 text-gray-400">
+                                        No agents connected yet...
+                                    </div>
+                                )}
+                            </div>
+                        </section>
+
+                        {/* Tabs */}
+                        <section className="mb-8">
+                            <div className="flex gap-4 border-b border-gray-700 mb-6">
+                                <button
+                                    onClick={() => setActiveTab("discoveries")}
+                                    className={`pb-2 px-2 ${activeTab === "discoveries" ? "border-b-2 border-blue-400 text-blue-400" : "text-gray-400 hover:text-gray-200"}`}
+                                >
+                                    Discoveries
+                                </button>
+                                <button
+                                    onClick={() => setActiveTab("timeline")}
+                                    className={`pb-2 px-2 ${activeTab === "timeline" ? "border-b-2 border-blue-400 text-blue-400" : "text-gray-400 hover:text-gray-200"}`}
+                                >
+                                    Timeline
+                                </button>
+                            </div>
+
+                            {activeTab === "discoveries" && (
+                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                                    {discoveries.map((discovery) => (
+                                        <DiscoveryCard key={`${discovery.agent_id}-${discovery.timestamp}`} discovery={discovery} />
+                                    ))}
+                                    {discoveries.length === 0 && (
+                                        <div className="col-span-full text-center py-8 text-gray-400">
+                                            No discoveries yet. Agents are exploring...
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {activeTab === "timeline" && (
+                                <BPBTimeline data={timeline} />
+                            )}
+                        </section>
+                    </main>
+                </div>
+            );
+        };
+
+        // Render
+        const root = ReactDOM.createRoot(document.getElementById("root"));
+        root.render(<Dashboard />);
+    </script>
+</body>
+</html>
